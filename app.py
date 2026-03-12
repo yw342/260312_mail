@@ -385,11 +385,21 @@ def get_low_stock_from_items(items):
     return low
 
 
-def check_and_send_alert(recipient_email):
-    """재고 부족 확인 후 담당자(recipient_email)에게 메일 발송. Supabase/엑셀 공통, 1시간 내 발송 품목 제외."""
-    if not recipient_email or "@" not in str(recipient_email).strip():
-        return False, 0, "담당자 이메일을 입력하세요."
-    recipient_email = str(recipient_email).strip()
+def _group_low_stock_by_email(low_stock):
+    """재고 부족 품목을 거래처이메일별로 묶음. 유효한 이메일만."""
+    by_email = {}
+    for x in low_stock:
+        email = (x.get("거래처이메일") or "").strip()
+        if not email or "@" not in email:
+            continue
+        if email not in by_email:
+            by_email[email] = []
+        by_email[email].append(x)
+    return by_email
+
+
+def check_and_send_alert():
+    """재고 부족 확인 후 각 품목의 거래처이메일로 메일 발송(거래처별 1통). 1시간 내 발송 품목 제외."""
     if not alert.SENDER_PASSWORD:
         return False, 0, "INVENTORY_SENDER_PASSWORD 환경 변수(또는 .env) 설정 필요"
     try:
@@ -403,15 +413,21 @@ def check_and_send_alert(recipient_email):
         low_stock_to_send = [x for x in low_stock if (x.get("품목코드") or "").strip() not in sent_recently]
         if not low_stock_to_send:
             return False, 0, "1시간 내 발송된 품목만 있어 이번에는 발송하지 않았습니다."
-        subject, body = alert.build_email_body(
-            recipient_email, low_stock_to_send, alert.SENDER_EMAIL, all_to_one=True
-        )
-        alert.send_mail(
-            recipient_email, subject, body,
-            alert.SENDER_EMAIL, alert.SENDER_PASSWORD
-        )
-        append_email_record(recipient_email, low_stock_to_send)
-        return True, len(low_stock_to_send), None
+        by_email = _group_low_stock_by_email(low_stock_to_send)
+        if not by_email:
+            return False, 0, "발송할 품목에 유효한 거래처 이메일이 없습니다."
+        total_sent = 0
+        for to_email, items_for_email in by_email.items():
+            subject, body = alert.build_email_body(
+                to_email, items_for_email, alert.SENDER_EMAIL, all_to_one=True
+            )
+            alert.send_mail(
+                to_email, subject, body,
+                alert.SENDER_EMAIL, alert.SENDER_PASSWORD
+            )
+            append_email_record(to_email, items_for_email)
+            total_sent += len(items_for_email)
+        return True, total_sent, None
     except Exception as e:
         return False, 0, str(e)
 
@@ -424,18 +440,15 @@ def save():
     updates = data.get("updates") if isinstance(data, dict) else []
     if not updates:
         return jsonify({"ok": False, "message": "updates 배열 필요"}), 400
-    recipient_email = (data.get("recipient_email") or "").strip() if isinstance(data, dict) else ""
     try:
         if USE_SUPABASE:
             update_inventory_supabase(updates)
         else:
             update_excel_current_stock(updates)
-        email_sent, alert_count, alert_error = check_and_send_alert(recipient_email)
+        email_sent, alert_count, alert_error = check_and_send_alert()
         res = {"ok": True, "email_sent": email_sent, "alert_count": alert_count}
         if alert_error and email_sent is False and alert_count == 0:
             res["alert_error"] = alert_error
-        if email_sent:
-            res["to"] = recipient_email
         return jsonify(res)
     except Exception as e:
         return jsonify({"ok": False, "message": str(e)}), 500
@@ -443,15 +456,13 @@ def save():
 
 @app.route("/send-alert", methods=["POST"])
 def send_alert():
-    """재고 부족 확인 후 HTML에서 받은 담당자 이메일로 메일 발송."""
-    data = request.get_json(force=True, silent=True) or request.form or {}
-    recipient_email = (data.get("recipient_email") or "").strip()
-    email_sent, alert_count, error = check_and_send_alert(recipient_email)
+    """재고 부족 확인 후 각 품목의 거래처이메일로 메일 발송."""
+    email_sent, alert_count, error = check_and_send_alert()
     if error and not email_sent:
         return jsonify({"ok": False, "message": error}), 400
     if not email_sent:
         return jsonify({"ok": True, "sent": 0, "message": "재고 부족 품목 없음"})
-    return jsonify({"ok": True, "sent": 1, "count": alert_count, "to": recipient_email})
+    return jsonify({"ok": True, "sent": 1, "count": alert_count, "message": "거래처 이메일로 발송 완료"})
 
 
 if __name__ == "__main__":
