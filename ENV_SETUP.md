@@ -19,8 +19,14 @@
 |--------------|----------------|------|------|
 | `INVENTORY_SENDER_EMAIL` | 발신용 Gmail 주소 | ✅ | 그대로 입력 |
 | `INVENTORY_SENDER_PASSWORD` | Gmail 앱 비밀번호 16자 | ✅ | 공백 없이 붙여서 입력 |
+| `SUPABASE_URL` | Supabase 프로젝트 URL | (권장) | 이메일 발송 이력 저장용 |
+| `SUPABASE_SERVICE_ROLE_KEY` | Supabase Service Role Key | (권장) | 위와 함께 설정 시 발송 이력이 DB에 저장됨 |
 
-**담당자 이메일(수신 주소)**은 환경 변수가 아니라 **웹 페이지 상단의 "담당자 이메일" 입력란**에서 입력합니다. 배포된 페이지에서 수신 주소를 바꿀 수 있습니다.
+**담당자 이메일(수신 주소)**은 환경 변수가 아니라 **웹 페이지 상단의 "담당자 이메일" 입력란**에서 입력합니다.
+
+**Supabase (선택·권장)**  
+Vercel은 파일 시스템이 읽기 전용이라 발송 이력을 파일로 쓸 수 없습니다. **SUPABASE_URL**과 **SUPABASE_SERVICE_ROLE_KEY**를 설정하면 발송 이력을 Supabase DB에 저장해, 이력 조회와 1시간 중복 방지가 정상 동작합니다.  
+Supabase 프로젝트 생성 후 `supabase_email_history.sql`을 SQL Editor에서 실행해 테이블을 만든 뒤, 위 두 환경 변수를 넣으면 됩니다.
 
 ---
 

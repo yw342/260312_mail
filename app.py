@@ -22,25 +22,64 @@ import inventory_alert as alert
 app = Flask(__name__)
 BASE_DIR = Path(__file__).resolve().parent
 EXCEL_PATH = Path(os.environ.get("INVENTORY_EXCEL_PATH", str(BASE_DIR / "domino_inventory_training.xlsx")))
-EMAIL_HISTORY_PATH = BASE_DIR / "email_history.json"
+# 이메일 발송 이력: Supabase 사용 시 DB, 미설정 시 파일
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "").strip()
+SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", os.environ.get("SUPABASE_KEY", "")).strip()
+USE_SUPABASE = bool(SUPABASE_URL and SUPABASE_KEY)
+
+if not USE_SUPABASE:
+    if os.environ.get("VERCEL"):
+        EMAIL_HISTORY_PATH = Path("/tmp/email_history.json")
+    else:
+        EMAIL_HISTORY_PATH = BASE_DIR / "email_history.json"
 EMAIL_THRESHOLD_HOURS = 1
 
+_supabase_client = None
 
-def load_email_history():
-    """이메일 발송 이력 로드."""
-    if not EMAIL_HISTORY_PATH.is_file():
+def _get_supabase():
+    if not USE_SUPABASE:
+        return None
+    global _supabase_client
+    if _supabase_client is None:
+        from supabase import create_client
+        _supabase_client = create_client(SUPABASE_URL, SUPABASE_KEY)
+    return _supabase_client
+
+
+def _load_email_history_file():
+    if USE_SUPABASE:
+        return []
+    path = EMAIL_HISTORY_PATH
+    if not path.is_file():
         return []
     try:
-        with open(EMAIL_HISTORY_PATH, "r", encoding="utf-8") as f:
+        with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
     except Exception:
         return []
 
 
-def save_email_history(records):
-    """이메일 발송 이력 저장 (최근 500건 유지)."""
+def _save_email_history_file(records):
+    if USE_SUPABASE:
+        return
     with open(EMAIL_HISTORY_PATH, "w", encoding="utf-8") as f:
         json.dump(records[-500:], f, ensure_ascii=False, indent=2)
+
+
+def load_email_history():
+    """이메일 발송 이력 로드 (Supabase 또는 파일)."""
+    if USE_SUPABASE:
+        try:
+            sb = _get_supabase()
+            r = sb.table("email_send_history").select("sent_at,to_email,item_codes,item_names").order("sent_at", desc=True).limit(500).execute()
+            rows = r.data or []
+            return [
+                {"sent_at": x.get("sent_at"), "to": x.get("to_email"), "item_codes": x.get("item_codes") or [], "item_names": x.get("item_names") or []}
+                for x in rows
+            ]
+        except Exception:
+            return []
+    return _load_email_history_file()
 
 
 def get_item_codes_sent_within_hours(hours=1):
@@ -63,24 +102,33 @@ def get_item_codes_sent_within_hours(hours=1):
 
 
 def append_email_record(to_email, items):
-    """발송 이력에 한 건 추가. items는 품목코드, 재료명 포함 dict 리스트."""
-    records = load_email_history()
+    """발송 이력에 한 건 추가 (Supabase 또는 파일)."""
     item_codes = [str(i.get("품목코드") or "").strip() for i in items if i.get("품목코드")]
     item_names = [str(i.get("재료명") or "").strip() for i in items]
-    records.append({
-        "sent_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-        "to": to_email,
-        "item_codes": item_codes,
-        "item_names": item_names,
-    })
-    save_email_history(records)
+    sent_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+    if USE_SUPABASE:
+        try:
+            sb = _get_supabase()
+            sb.table("email_send_history").insert({
+                "sent_at": sent_at,
+                "to_email": to_email,
+                "item_codes": item_codes,
+                "item_names": item_names,
+            }).execute()
+        except Exception:
+            pass
+        return
+    records = _load_email_history_file()
+    records.append({"sent_at": sent_at, "to": to_email, "item_codes": item_codes, "item_names": item_names})
+    _save_email_history_file(records)
 
 
 def get_email_history_for_display(limit=50):
-    """하단 이력 표시용. 최근 limit건, sent_at을 로컬 시간으로 포맷."""
+    """하단 이력 표시용. 최근 limit건."""
     records = load_email_history()
     out = []
-    for r in reversed(records[-limit:]):
+    for r in (records[:limit] if USE_SUPABASE else reversed(records[-limit:])):
         try:
             sent_at = r.get("sent_at", "")
             if sent_at:
@@ -90,7 +138,7 @@ def get_email_history_for_display(limit=50):
             pass
         out.append({
             "sent_at": sent_at,
-            "to": r.get("to", ""),
+            "to": r.get("to") or r.get("to_email", ""),
             "item_names": r.get("item_names") or [],
         })
     return out
