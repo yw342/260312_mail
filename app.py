@@ -74,10 +74,10 @@ def load_email_history():
     if USE_SUPABASE:
         try:
             sb = _get_supabase()
-            r = sb.table("email_send_history").select("sent_at,to_email,item_codes,item_names").order("sent_at", desc=True).limit(500).execute()
+            r = sb.table("email_send_history").select("id,sent_at,to_email,item_codes,item_names").order("sent_at", desc=True).limit(500).execute()
             rows = r.data or []
             return [
-                {"sent_at": x.get("sent_at"), "to": x.get("to_email"), "item_codes": x.get("item_codes") or [], "item_names": x.get("item_names") or []}
+                {"id": x.get("id"), "sent_at": x.get("sent_at"), "to": x.get("to_email"), "item_codes": x.get("item_codes") or [], "item_names": x.get("item_names") or []}
                 for x in rows
             ]
         except Exception:
@@ -128,10 +128,11 @@ def append_email_record(to_email, items):
 
 
 def get_email_history_for_display(limit=50):
-    """하단 이력 표시용. 최근 limit건."""
+    """하단 이력 표시용. 최근 limit건. 각 행에 id 포함 (삭제용)."""
     records = load_email_history()
     out = []
-    for r in (records[:limit] if USE_SUPABASE else reversed(records[-limit:])):
+    iter_records = records[:limit] if USE_SUPABASE else list(reversed(records[-limit:]))
+    for i, r in enumerate(iter_records):
         try:
             sent_at = r.get("sent_at", "")
             if sent_at:
@@ -139,7 +140,9 @@ def get_email_history_for_display(limit=50):
                 sent_at = dt.strftime("%Y-%m-%d %H:%M")
         except Exception:
             pass
+        record_id = r.get("id") if USE_SUPABASE else ("file_" + str(i))
         out.append({
+            "id": record_id,
             "sent_at": sent_at,
             "to": r.get("to") or r.get("to_email", ""),
             "item_names": r.get("item_names") or [],
@@ -463,6 +466,47 @@ def send_alert():
     if not email_sent:
         return jsonify({"ok": True, "sent": 0, "message": "재고 부족 품목 없음"})
     return jsonify({"ok": True, "sent": 1, "count": alert_count, "message": "거래처 이메일로 발송 완료"})
+
+
+def delete_email_history_record(record_id):
+    """발송 이력 한 건 삭제. Supabase는 id(uuid), 파일은 file_0 형식."""
+    if not record_id:
+        return False, "id 없음"
+    if USE_SUPABASE:
+        try:
+            sb = _get_supabase()
+            sb.table("email_send_history").delete().eq("id", record_id).execute()
+            return True, None
+        except Exception as e:
+            return False, str(e)
+    # 파일 모드: file_0, file_1 ... = 표시 순서(0=최신)
+    if isinstance(record_id, str) and record_id.startswith("file_"):
+        try:
+            i = int(record_id.split("_")[1])
+            records = _load_email_history_file()
+            # 표시 순서 i = 리스트에서 len(records)-1-i 번째 (최신이 마지막)
+            idx = len(records) - 1 - i
+            if idx < 0 or idx >= len(records):
+                return False, "범위 오류"
+            records.pop(idx)
+            _save_email_history_file(records)
+            return True, None
+        except (ValueError, IndexError) as e:
+            return False, str(e)
+    return False, "잘못된 id"
+
+
+@app.route("/delete-email-history", methods=["POST"])
+def delete_email_history():
+    """이메일 발송 이력 한 건 삭제. DB/파일 반영 후 이메일 발송여부에서 제외됨."""
+    data = request.get_json(force=True, silent=True) or {}
+    record_id = (data.get("id") or "").strip() or data.get("id")
+    if not record_id:
+        return jsonify({"ok": False, "message": "id 필요"}), 400
+    ok, err = delete_email_history_record(record_id)
+    if not ok:
+        return jsonify({"ok": False, "message": err or "삭제 실패"}), 400
+    return jsonify({"ok": True})
 
 
 if __name__ == "__main__":

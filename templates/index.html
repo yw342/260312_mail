@@ -48,6 +48,8 @@
     .email-history { background: #fff; border-radius: 8px; padding: 20px; margin-top: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
     .email-history h3 { margin: 0 0 12px; font-size: 16px; color: #334155; }
     .email-history .history-table { min-width: 400px; }
+    .btn-delete-history { padding: 6px 12px; font-size: 12px; background: #64748b; color: #fff; border: none; border-radius: 4px; cursor: pointer; }
+    .btn-delete-history:hover { background: #475569; }
     .email-history .history-note { margin: 12px 0 0; font-size: 12px; color: #64748b; }
     .email-history .history-empty { color: #94a3b8; font-size: 14px; }
   </style>
@@ -142,14 +144,16 @@
             <th>발송 시각</th>
             <th>수신</th>
             <th>품목</th>
+            <th>이력삭제</th>
           </tr>
         </thead>
         <tbody>
           {% for h in email_history %}
-          <tr>
+          <tr data-history-id="{{ h.id }}">
             <td>{{ h.sent_at }}</td>
             <td>{{ h.to }}</td>
             <td>{{ h.item_names | join(', ') }}</td>
+            <td><button type="button" class="btn-delete-history" data-id="{{ h.id }}">이력삭제</button></td>
           </tr>
           {% endfor %}
         </tbody>
@@ -233,6 +237,34 @@
         .catch(function () { showMsg("요청 실패", true); })
         .finally(function () { document.getElementById("btnAlert").disabled = false; });
     };
+
+    document.querySelector(".email-history").addEventListener("click", function (e) {
+      var btn = e.target.closest(".btn-delete-history");
+      if (!btn) return;
+      var id = (btn.getAttribute("data-id") || "").trim();
+      if (!id) return;
+      if (!confirm("이 발송 이력을 삭제할까요? 삭제하면 해당 품목의 이메일 발송여부 표시가 사라집니다.")) return;
+      btn.disabled = true;
+      fetch("/delete-email-history", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: id })
+      })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          if (data.ok) {
+            showMsg("이력이 삭제되었습니다.", false);
+            setTimeout(function () { location.reload(); }, 800);
+          } else {
+            showMsg(data.message || "삭제 실패", true);
+            btn.disabled = false;
+          }
+        })
+        .catch(function () {
+          showMsg("요청 실패", true);
+          btn.disabled = false;
+        });
+    });
   </script>
 </body>
 </html>
