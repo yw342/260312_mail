@@ -1,0 +1,32 @@
+# 비밀정보 (절대 커밋 금지)
+.env
+.env.local
+.env.*.local
+*.pem
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+env/
+ENV/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Excel 임시/백업 (필요 시 제거)
+# *.xlsx
+
+# 로그
+*.log
