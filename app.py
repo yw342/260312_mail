@@ -9,7 +9,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from flask import Flask, render_template, request, jsonify, redirect, url_for
+from flask import Flask, render_template, request, jsonify, redirect, url_for, session
 
 try:
     from dotenv import load_dotenv
@@ -20,6 +20,9 @@ except ImportError:
 import inventory_alert as alert
 
 app = Flask(__name__)
+app.secret_key = os.environ.get("FLASK_SECRET_KEY", "inventory-app-secret-change-in-production")
+# 페이지 접속 비밀번호 (최초 접속 시 입력)
+PAGE_PASSWORD = os.environ.get("PAGE_PASSWORD", "3082")
 BASE_DIR = Path(__file__).resolve().parent
 EXCEL_PATH = Path(os.environ.get("INVENTORY_EXCEL_PATH", str(BASE_DIR / "domino_inventory_training.xlsx")))
 # 이메일 발송 이력: Supabase 사용 시 DB, 미설정 시 파일
@@ -318,6 +321,32 @@ def get_dashboard(items):
         "low_stock_count": low_count,
         "low_stock_names": low_stock_names,
     }
+
+
+@app.before_request
+def require_login():
+    if request.endpoint in ("login", "logout", "static"):
+        return None
+    if session.get("authenticated"):
+        return None
+    return redirect(url_for("login"))
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if request.method == "POST":
+        password = request.form.get("password") or (request.get_json(silent=True) or {}).get("password") or ""
+        if str(password).strip() == PAGE_PASSWORD:
+            session["authenticated"] = True
+            return redirect(url_for("index"))
+        return render_template("login.html", error="비밀번호가 올바르지 않습니다.")
+    return render_template("login.html", error=None)
+
+
+@app.route("/logout")
+def logout():
+    session.pop("authenticated", None)
+    return redirect(url_for("login"))
 
 
 @app.route("/")
