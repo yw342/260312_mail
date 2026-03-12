@@ -23,6 +23,7 @@
     th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid #eee; }
     th { background: #f8fafc; font-weight: 600; color: #475569; }
     td input[type="number"] { width: 80px; padding: 6px 8px; border: 1px solid #cbd5e1; border-radius: 4px; }
+    td input[type="email"] { width: 100%; min-width: 140px; padding: 6px 8px; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 13px; }
     .status-bad { color: #dc2626; font-weight: 500; }
     .status-ok { color: #16a34a; }
     footer { margin-top: 24px; color: #64748b; font-size: 12px; }
@@ -113,17 +114,19 @@
       </thead>
       <tbody>
         {% for it in items %}
-        <tr>
+        <tr data-row="{{ it.row }}" data-id="{{ it.id or '' }}">
           <td>{{ it.품목코드 }}</td>
           <td>{{ it.재료명 }}</td>
           <td>{{ it.규격 }}</td>
           <td>{{ it.단위 }}</td>
           <td>
-            <input type="number" min="0" step="1" data-row="{{ it.row }}" value="{{ it.현재재고 }}" class="input-current" />
+            <input type="number" min="0" step="1" data-row="{{ it.row }}" data-id="{{ it.id or '' }}" value="{{ it.현재재고 }}" class="input-current" />
           </td>
           <td>{{ it.안전재고 }}</td>
           <td class="{{ 'status-bad' if it.상태 == '발주 필요' else 'status-ok' }}">{{ it.상태 }}</td>
-          <td>{{ it.거래처이메일 }}</td>
+          <td>
+            <input type="email" class="input-email" data-row="{{ it.row }}" data-id="{{ it.id or '' }}" value="{{ it.거래처이메일 }}" placeholder="거래처 이메일" />
+          </td>
           <td class="{{ 'sent-recent' if it.이메일_발송여부 == '1시간 내 발송' else '' }}">{{ it.이메일_발송여부 }}</td>
         </tr>
         {% endfor %}
@@ -176,12 +179,19 @@
 
     document.getElementById("btnSave").onclick = function () {
       var recipientEmail = getRecipientEmail();
-      var inputs = document.querySelectorAll(".input-current");
+      var rows = document.querySelectorAll(".table-wrap tbody tr");
       var updates = [];
-      inputs.forEach(function (inp) {
-        var row = inp.getAttribute("data-row");
-        var val = inp.value;
-        if (row != null) updates.push({ row: parseInt(row, 10), "현재재고": val === "" ? 0 : parseFloat(val) });
+      rows.forEach(function (tr) {
+        var id = (tr.getAttribute("data-id") || "").trim();
+        var row = tr.getAttribute("data-row");
+        var currentInput = tr.querySelector(".input-current");
+        var emailInput = tr.querySelector(".input-email");
+        var currentVal = currentInput ? (currentInput.value === "" ? 0 : parseFloat(currentInput.value)) : 0;
+        var emailVal = emailInput ? (emailInput.value || "").trim() : "";
+        var u = { "현재재고": currentVal, "거래처이메일": emailVal };
+        if (id) u.id = id;
+        if (row != null) u.row = parseInt(row, 10);
+        updates.push(u);
       });
       fetch("/save", {
         method: "POST",

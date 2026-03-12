@@ -24,9 +24,11 @@
 
 **담당자 이메일(수신 주소)**은 환경 변수가 아니라 **웹 페이지 상단의 "담당자 이메일" 입력란**에서 입력합니다.
 
-**Supabase (선택·권장)**  
-Vercel은 파일 시스템이 읽기 전용이라 발송 이력을 파일로 쓸 수 없습니다. **SUPABASE_URL**과 **SUPABASE_SERVICE_ROLE_KEY**를 설정하면 발송 이력을 Supabase DB에 저장해, 이력 조회와 1시간 중복 방지가 정상 동작합니다.  
-Supabase 프로젝트 생성 후 `supabase_email_history.sql`을 SQL Editor에서 실행해 테이블을 만든 뒤, 위 두 환경 변수를 넣으면 됩니다.
+**Supabase (Vercel 배포 시 권장)**  
+Vercel은 파일 시스템이 읽기 전용이라 (1) 재고 저장·(2) 발송 이력 저장이 불가합니다. **SUPABASE_URL**과 **SUPABASE_SERVICE_ROLE_KEY**를 설정하면 둘 다 Supabase에 저장됩니다.  
+1. `supabase_email_history.sql` → SQL Editor에서 실행 (발송 이력 테이블)  
+2. `supabase_inventory.sql` → SQL Editor에서 실행 (재고 테이블)  
+3. 로컬에서 한 번만 `python seed_inventory_from_excel.py` 실행 → 엑셀 재고 데이터를 Supabase로 넣기 (선택)
 
 ---
 

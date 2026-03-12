@@ -115,6 +115,7 @@ python inventory_alert.py
 | `INVENTORY_SENDER_PASSWORD` | Gmail 앱 비밀번호 16자 (공백 없이) | ✅ |
 
 - **담당자 이메일(수신 주소)**은 환경 변수가 아니라 **웹 페이지 상단 "담당자 이메일" 입력란**에서 입력합니다.
-- **이메일 발송 이력** (Vercel): Vercel은 파일 쓰기가 불가하므로, **Supabase**를 쓰면 이력이 DB에 저장됩니다. `SUPABASE_URL`·`SUPABASE_SERVICE_ROLE_KEY` 설정 후 Supabase SQL Editor에서 `supabase_email_history.sql` 실행해 테이블을 만드세요.
+- **재고 데이터** (Vercel): Vercel은 엑셀 파일 쓰기가 불가하므로, **Supabase**에 재고 테이블을 두고 사용합니다. `supabase_inventory.sql`을 SQL Editor에서 실행한 뒤, 로컬에서 `python seed_inventory_from_excel.py`로 엑셀 데이터를 한 번 넣을 수 있습니다.
+- **이메일 발송 이력** (Vercel): `supabase_email_history.sql` 실행 후 발송 이력이 DB에 저장됩니다.
 - 입력 위치: Vercel → 프로젝트 → **Settings** → **Environment Variables**
 - `INVENTORY_SENDER_PASSWORD`는 [Google 앱 비밀번호](https://myaccount.google.com/apppasswords)에서 발급 (일반 비밀번호 아님). 값은 **Encrypted** 저장, 코드/저장소에 넣지 마세요.

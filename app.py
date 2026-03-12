@@ -160,8 +160,46 @@ def _num_display(val):
     return val
 
 
+def get_inventory_from_supabase():
+    """Supabase inventory 테이블에서 재고 목록 로드."""
+    try:
+        sb = _get_supabase()
+        r = sb.table("inventory").select("*").order("row_order").execute()
+        rows = r.data or []
+    except Exception:
+        return []
+    sent_within_hour = get_item_codes_sent_within_hours(EMAIL_THRESHOLD_HOURS)
+    result = []
+    for i, x in enumerate(rows):
+        code = (x.get("item_code") or "").strip()
+        current = x.get("current_stock")
+        safety = x.get("safety_stock")
+        try:
+            current = float(current) if current is not None else 0
+            safety = float(safety) if safety is not None else 0
+        except (TypeError, ValueError):
+            current, safety = 0, 0
+        status = "발주 필요" if current < safety else "정상"
+        result.append({
+            "id": str(x.get("id", "")),
+            "row": i + 1,
+            "품목코드": code,
+            "재료명": (x.get("item_name") or "").strip(),
+            "규격": _num_display(x.get("spec")),
+            "단위": (x.get("unit") or "").strip(),
+            "현재재고": _num_display(current),
+            "안전재고": _num_display(safety),
+            "상태": status,
+            "거래처이메일": (x.get("supplier_email") or "").strip(),
+            "이메일_발송여부": "1시간 내 발송" if (code and code in sent_within_hour) else "-",
+        })
+    return result
+
+
 def get_inventory_list():
-    """엑셀에서 재고 목록을 읽어 웹용 리스트로 반환 (row_idx는 엑셀 1-based 행)."""
+    """재고 목록 (Supabase 우선, 없으면 엑셀)."""
+    if USE_SUPABASE:
+        return get_inventory_from_supabase()
     data_rows, col = alert.load_inventory(EXCEL_PATH)
     if not col:
         return []
@@ -185,12 +223,13 @@ def get_inventory_list():
     sent_within_hour = get_item_codes_sent_within_hours(EMAIL_THRESHOLD_HOURS)
     result = []
     for i, row in enumerate(data_rows):
-        excel_row = i + 2  # 1-based, row 1 = header
+        excel_row = i + 2
         raw_spec = v(row, idx_spec)
         raw_current = v(row, idx_current)
         raw_safety = v(row, idx_safety)
         code = v(row, idx_code)
         result.append({
+            "id": None,
             "row": excel_row,
             "품목코드": code,
             "재료명": v(row, idx_name),
@@ -205,32 +244,56 @@ def get_inventory_list():
     return result
 
 
+def update_inventory_supabase(updates):
+    """Supabase inventory 테이블 업데이트 (현재재고, 거래처이메일)."""
+    sb = _get_supabase()
+    for u in updates:
+        uid = u.get("id")
+        if not uid:
+            continue
+        payload = {}
+        if "현재재고" in u:
+            try:
+                payload["current_stock"] = float(u["현재재고"])
+            except (TypeError, ValueError):
+                payload["current_stock"] = u["현재재고"]
+        if "거래처이메일" in u:
+            payload["supplier_email"] = (u.get("거래처이메일") or "").strip()
+        if payload:
+            sb.table("inventory").update(payload).eq("id", uid).execute()
+
+
 def update_excel_current_stock(updates):
-    """updates: [ {"row": 2, "현재재고": 120}, ... ] → 엑셀 해당 행의 현재재고 컬럼 수정."""
+    """updates: [ {"row": 2, "현재재고": 120, "거래처이메일": "..."}, ... ] → 엑셀 해당 행 수정."""
     import openpyxl
-    wb = openpyxl.load_workbook(EXCEL_PATH, data_only=False)
+    try:
+        wb = openpyxl.load_workbook(EXCEL_PATH, data_only=False)
+    except Exception:
+        return False
     if "Inventory" not in wb.sheetnames:
         wb.close()
         return False
     ws = wb["Inventory"]
     header = [ws.cell(1, c).value for c in range(1, ws.max_column + 1)]
-    col_current = None
+    col_current = col_email = None
     for i, h in enumerate(header):
         if h and ("현재재고" in str(h) or "현재 재고" in str(h)):
             col_current = i + 1
-            break
-    if col_current is None:
-        wb.close()
-        return False
+        if h and ("거래처이메일" in str(h) or "이메일" == str(h).strip()):
+            col_email = i + 1
     for u in updates:
         row = u.get("row")
-        val = u.get("현재재고")
-        if row is not None and val is not None:
+        if row is None:
+            continue
+        if col_current is not None and "현재재고" in u:
+            val = u["현재재고"]
             try:
                 n = float(val)
                 ws.cell(row=int(row), column=col_current, value=n)
             except (TypeError, ValueError):
                 ws.cell(row=int(row), column=col_current, value=val)
+        if col_email is not None and "거래처이메일" in u:
+            ws.cell(row=int(row), column=col_email, value=(u.get("거래처이메일") or "").strip())
     wb.save(EXCEL_PATH)
     wb.close()
     return True
@@ -265,18 +328,46 @@ def index():
     return render_template("index.html", items=items, dashboard=dashboard, email_history=email_history)
 
 
+def get_low_stock_from_items(items):
+    """웹용 재고 목록에서 현재재고 < 안전재고 인 품목만 추출 (alert.build_email_body 형식)."""
+    low = []
+    for it in items:
+        try:
+            current = float(it.get("현재재고") or 0)
+            safety = float(it.get("안전재고") or 0)
+        except (TypeError, ValueError):
+            current, safety = 0, 0
+        if current >= safety:
+            continue
+        name = (it.get("재료명") or "").strip() or "-"
+        unit = (it.get("단위") or "").strip()
+        order_qty = max(0, safety - current)
+        msg = f"{name} 재고 부족 - 현재 {int(current)}{unit}, 안전재고 {int(safety)}{unit}, 권장발주 {order_qty}{unit}"
+        low.append({
+            "품목코드": (it.get("품목코드") or "").strip(),
+            "재료명": name,
+            "단위": unit,
+            "현재재고": current,
+            "안전재고": safety,
+            "발주권장수량": order_qty,
+            "담당자알림메시지": msg,
+            "거래처이메일": (it.get("거래처이메일") or "").strip(),
+        })
+    return low
+
+
 def check_and_send_alert(recipient_email):
-    """저장된 엑셀 기준으로 재고 부족 확인 후 담당자(recipient_email)에게 메일 발송. 1시간 내 발송한 품목은 제외."""
+    """재고 부족 확인 후 담당자(recipient_email)에게 메일 발송. Supabase/엑셀 공통, 1시간 내 발송 품목 제외."""
     if not recipient_email or "@" not in str(recipient_email).strip():
         return False, 0, "담당자 이메일을 입력하세요."
     recipient_email = str(recipient_email).strip()
     if not alert.SENDER_PASSWORD:
         return False, 0, "INVENTORY_SENDER_PASSWORD 환경 변수(또는 .env) 설정 필요"
     try:
-        data_rows, col = alert.load_inventory(EXCEL_PATH)
-        if not col:
-            return False, 0, "Inventory 시트 헤더 없음"
-        low_stock = alert.get_low_stock_items(data_rows, col)
+        items = get_inventory_list()
+        if not items:
+            return False, 0, "재고 데이터가 없습니다." if USE_SUPABASE else "Inventory 시트 헤더 없음"
+        low_stock = get_low_stock_from_items(items)
         if not low_stock:
             return False, 0, None
         sent_recently = get_item_codes_sent_within_hours(EMAIL_THRESHOLD_HOURS)
@@ -306,7 +397,10 @@ def save():
         return jsonify({"ok": False, "message": "updates 배열 필요"}), 400
     recipient_email = (data.get("recipient_email") or "").strip() if isinstance(data, dict) else ""
     try:
-        update_excel_current_stock(updates)
+        if USE_SUPABASE:
+            update_inventory_supabase(updates)
+        else:
+            update_excel_current_stock(updates)
         email_sent, alert_count, alert_error = check_and_send_alert(recipient_email)
         res = {"ok": True, "email_sent": email_sent, "alert_count": alert_count}
         if alert_error and email_sent is False and alert_count == 0:
