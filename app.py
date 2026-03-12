@@ -21,8 +21,9 @@ import inventory_alert as alert
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "inventory-app-secret-change-in-production")
-# 페이지 접속 비밀번호 (최초 접속 시 입력)
+# 페이지 접속: 3082=일반, 3082!@=관리자
 PAGE_PASSWORD = os.environ.get("PAGE_PASSWORD", "3082")
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "3082!@")
 BASE_DIR = Path(__file__).resolve().parent
 EXCEL_PATH = Path(os.environ.get("INVENTORY_EXCEL_PATH", str(BASE_DIR / "domino_inventory_training.xlsx")))
 # 이메일 발송 이력: Supabase 사용 시 DB, 미설정 시 파일
@@ -338,9 +339,14 @@ def require_login():
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
-        password = request.form.get("password") or (request.get_json(silent=True) or {}).get("password") or ""
-        if str(password).strip() == PAGE_PASSWORD:
+        password = (request.form.get("password") or (request.get_json(silent=True) or {}).get("password") or "").strip()
+        if password == ADMIN_PASSWORD:
             session["authenticated"] = True
+            session["role"] = "admin"
+            return redirect(url_for("index"))
+        if password == PAGE_PASSWORD:
+            session["authenticated"] = True
+            session["role"] = "user"
             return redirect(url_for("index"))
         return render_template("login.html", error="비밀번호가 올바르지 않습니다.")
     return render_template("login.html", error=None)
@@ -349,7 +355,12 @@ def login():
 @app.route("/logout")
 def logout():
     session.pop("authenticated", None)
+    session.pop("role", None)
     return redirect(url_for("login"))
+
+
+def _is_admin():
+    return session.get("role") == "admin"
 
 
 @app.route("/")
@@ -357,7 +368,7 @@ def index():
     items = get_inventory_list()
     dashboard = get_dashboard(items)
     email_history = get_email_history_for_display(50)
-    return render_template("index.html", items=items, dashboard=dashboard, email_history=email_history)
+    return render_template("index.html", items=items, dashboard=dashboard, email_history=email_history, is_admin=_is_admin())
 
 
 def get_low_stock_from_items(items):
@@ -443,6 +454,8 @@ def save():
     updates = data.get("updates") if isinstance(data, dict) else []
     if not updates:
         return jsonify({"ok": False, "message": "updates 배열 필요"}), 400
+    if not _is_admin():
+        return jsonify({"ok": False, "message": "재고·거래처 이메일 수정은 관리자만 가능합니다."}), 403
     try:
         if USE_SUPABASE:
             update_inventory_supabase(updates)
@@ -498,7 +511,9 @@ def delete_email_history_record(record_id):
 
 @app.route("/delete-email-history", methods=["POST"])
 def delete_email_history():
-    """이메일 발송 이력 한 건 삭제. DB/파일 반영 후 이메일 발송여부에서 제외됨."""
+    """이메일 발송 이력 한 건 삭제. 관리자만 가능."""
+    if not _is_admin():
+        return jsonify({"ok": False, "message": "이력 삭제는 관리자만 가능합니다."}), 403
     data = request.get_json(force=True, silent=True) or {}
     record_id = (data.get("id") or "").strip() or data.get("id")
     if not record_id:

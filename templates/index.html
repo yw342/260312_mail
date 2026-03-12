@@ -50,13 +50,14 @@
     .email-history .history-table { min-width: 400px; }
     .btn-delete-history { padding: 6px 12px; font-size: 12px; background: #64748b; color: #fff; border: none; border-radius: 4px; cursor: pointer; }
     .btn-delete-history:hover { background: #475569; }
+    .readonly-field { background: #f1f5f9; color: #64748b; cursor: not-allowed; }
     .email-history .history-note { margin: 12px 0 0; font-size: 12px; color: #64748b; }
     .email-history .history-empty { color: #94a3b8; font-size: 14px; }
   </style>
 </head>
 <body>
   <div class="header-row">
-    <h1>재고 입력</h1>
+    <h1>재고 입력 {% if is_admin %}<span style="font-size:14px;color:#64748b;">(관리자)</span>{% else %}<span style="font-size:14px;color:#64748b;">(일반)</span>{% endif %}</h1>
     <a href="{{ url_for('logout') }}" class="logout-link">로그아웃</a>
   </div>
   <p class="sub">현재재고를 입력·수정한 뒤 저장하세요. 재고 부족 시 각 품목의 <strong>거래처 이메일</strong>란에 적힌 주소로 메일이 발송됩니다 (발신: byw004422@gmail.com).</p>
@@ -93,7 +94,7 @@
 
   <div id="msg"></div>
   <div class="bar">
-    <button type="button" class="btn btn-save" id="btnSave">저장</button>
+    {% if is_admin %}<button type="button" class="btn btn-save" id="btnSave">저장</button>{% endif %}
     <button type="button" class="btn btn-alert" id="btnAlert">재고 부족 확인 및 메일 발송</button>
   </div>
 
@@ -120,12 +121,12 @@
           <td>{{ it.규격 }}</td>
           <td>{{ it.단위 }}</td>
           <td>
-            <input type="number" min="0" step="1" data-row="{{ it.row }}" data-id="{{ it.id or '' }}" value="{{ it.현재재고 }}" class="input-current" />
+            <input type="number" min="0" step="1" data-row="{{ it.row }}" data-id="{{ it.id or '' }}" value="{{ it.현재재고 }}" class="input-current {{ 'readonly-field' if not is_admin else '' }}" {{ 'readonly' if not is_admin else '' }} />
           </td>
           <td>{{ it.안전재고 }}</td>
           <td class="{{ 'status-bad' if it.상태 == '발주 필요' else 'status-ok' }}">{{ it.상태 }}</td>
           <td>
-            <input type="email" class="input-email" data-row="{{ it.row }}" data-id="{{ it.id or '' }}" value="{{ it.거래처이메일 }}" placeholder="거래처 이메일" />
+            <input type="email" class="input-email {{ 'readonly-field' if not is_admin else '' }}" data-row="{{ it.row }}" data-id="{{ it.id or '' }}" value="{{ it.거래처이메일 }}" placeholder="거래처 이메일" {{ 'readonly' if not is_admin else '' }} />
           </td>
           <td class="{{ 'sent-recent' if it.이메일_발송여부 == '1시간 내 발송' else '' }}">{{ it.이메일_발송여부 }}</td>
         </tr>
@@ -144,7 +145,7 @@
             <th>발송 시각</th>
             <th>수신</th>
             <th>품목</th>
-            <th>이력삭제</th>
+            {% if is_admin %}<th>이력삭제</th>{% endif %}
           </tr>
         </thead>
         <tbody>
@@ -153,7 +154,7 @@
             <td>{{ h.sent_at }}</td>
             <td>{{ h.to }}</td>
             <td>{{ h.item_names | join(', ') }}</td>
-            <td><button type="button" class="btn-delete-history" data-id="{{ h.id }}">이력삭제</button></td>
+            {% if is_admin %}<td><button type="button" class="btn-delete-history" data-id="{{ h.id }}">이력삭제</button></td>{% endif %}
           </tr>
           {% endfor %}
         </tbody>
@@ -177,43 +178,46 @@
       el.style.display = "block";
     }
 
-    document.getElementById("btnSave").onclick = function () {
-      var rows = document.querySelectorAll(".table-wrap tbody tr");
-      var updates = [];
-      rows.forEach(function (tr) {
-        var id = (tr.getAttribute("data-id") || "").trim();
-        var row = tr.getAttribute("data-row");
-        var currentInput = tr.querySelector(".input-current");
-        var emailInput = tr.querySelector(".input-email");
-        var currentVal = currentInput ? (currentInput.value === "" ? 0 : parseFloat(currentInput.value)) : 0;
-        var emailVal = emailInput ? (emailInput.value || "").trim() : "";
-        var u = { "현재재고": currentVal, "거래처이메일": emailVal };
-        if (id) u.id = id;
-        if (row != null) u.row = parseInt(row, 10);
-        updates.push(u);
-      });
-      fetch("/save", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ updates: updates })
-      })
-        .then(function (r) { return r.json(); })
-        .then(function (data) {
-          if (data.ok) {
-            if (data.email_sent && data.alert_count) {
-              showMsg("저장되었습니다. 재고 부족 품목 " + data.alert_count + "건을 거래처 이메일로 자동 발송했습니다.", false);
-            } else if (data.alert_error) {
-              showMsg("저장되었습니다. 단, 메일 자동 발송 실패: " + data.alert_error, true);
-            } else {
-              showMsg("저장되었습니다. 새로고침 시 상태가 반영됩니다.", false);
-            }
-            setTimeout(function () { location.reload(); }, 1200);
-          } else {
-            showMsg(data.message || "저장 실패", true);
-          }
+    var btnSave = document.getElementById("btnSave");
+    if (btnSave) {
+      btnSave.onclick = function () {
+        var rows = document.querySelectorAll(".table-wrap tbody tr");
+        var updates = [];
+        rows.forEach(function (tr) {
+          var id = (tr.getAttribute("data-id") || "").trim();
+          var row = tr.getAttribute("data-row");
+          var currentInput = tr.querySelector(".input-current");
+          var emailInput = tr.querySelector(".input-email");
+          var currentVal = currentInput ? (currentInput.value === "" ? 0 : parseFloat(currentInput.value)) : 0;
+          var emailVal = emailInput ? (emailInput.value || "").trim() : "";
+          var u = { "현재재고": currentVal, "거래처이메일": emailVal };
+          if (id) u.id = id;
+          if (row != null) u.row = parseInt(row, 10);
+          updates.push(u);
+        });
+        fetch("/save", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ updates: updates })
         })
-        .catch(function () { showMsg("저장 요청 실패", true); });
-    };
+          .then(function (r) { return r.json(); })
+          .then(function (data) {
+            if (data.ok) {
+              if (data.email_sent && data.alert_count) {
+                showMsg("저장되었습니다. 재고 부족 품목 " + data.alert_count + "건을 거래처 이메일로 자동 발송했습니다.", false);
+              } else if (data.alert_error) {
+                showMsg("저장되었습니다. 단, 메일 자동 발송 실패: " + data.alert_error, true);
+              } else {
+                showMsg("저장되었습니다. 새로고침 시 상태가 반영됩니다.", false);
+              }
+              setTimeout(function () { location.reload(); }, 1200);
+            } else {
+              showMsg(data.message || "저장 실패", true);
+            }
+          })
+          .catch(function () { showMsg("저장 요청 실패", true); });
+      };
+    }
 
     document.getElementById("btnAlert").onclick = function () {
       this.disabled = true;
