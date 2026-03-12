@@ -40,11 +40,25 @@
     .dashboard-summary .tags { display: flex; flex-wrap: wrap; gap: 8px; }
     .dashboard-summary .tag { background: #fef2f2; color: #b91c1c; padding: 6px 12px; border-radius: 6px; font-size: 13px; }
     .dashboard-summary .tag.none { background: #f0fdf4; color: #166534; }
+    .recipient-bar { background: #fff; border-radius: 8px; padding: 14px 20px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+    .recipient-bar label { font-weight: 600; color: #475569; }
+    .recipient-bar input[type="email"] { flex: 1; min-width: 220px; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 14px; }
+    .sent-recent { color: #059669; font-weight: 500; }
+    .email-history { background: #fff; border-radius: 8px; padding: 20px; margin-top: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+    .email-history h3 { margin: 0 0 12px; font-size: 16px; color: #334155; }
+    .email-history .history-table { min-width: 400px; }
+    .email-history .history-note { margin: 12px 0 0; font-size: 12px; color: #64748b; }
+    .email-history .history-empty { color: #94a3b8; font-size: 14px; }
   </style>
 </head>
 <body>
   <h1>재고 입력</h1>
-  <p class="sub">현재재고를 입력·수정한 뒤 저장하세요. 재고 부족 시 ibk6895@gmail.com 으로 메일이 발송됩니다 (발신: byw004422@gmail.com).</p>
+  <p class="sub">현재재고를 입력·수정한 뒤 저장하세요. 재고 부족 시 아래 담당자 이메일로 메일이 발송됩니다 (발신: byw004422@gmail.com).</p>
+
+  <div class="recipient-bar">
+    <label for="recipientEmail">담당자 이메일 (수신 주소)</label>
+    <input type="email" id="recipientEmail" value="ibk6895@gmail.com" placeholder="예: ibk6895@gmail.com" />
+  </div>
 
   <section class="dashboard" aria-label="재고 현황 대시보드">
     <div class="dashboard-card total">
@@ -94,6 +108,7 @@
           <th>안전재고</th>
           <th>상태</th>
           <th>거래처 이메일</th>
+          <th>이메일 발송여부</th>
         </tr>
       </thead>
       <tbody>
@@ -109,11 +124,41 @@
           <td>{{ it.안전재고 }}</td>
           <td class="{{ 'status-bad' if it.상태 == '발주 필요' else 'status-ok' }}">{{ it.상태 }}</td>
           <td>{{ it.거래처이메일 }}</td>
+          <td class="{{ 'sent-recent' if it.이메일_발송여부 == '1시간 내 발송' else '' }}">{{ it.이메일_발송여부 }}</td>
         </tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
+
+  <section class="email-history">
+    <h3>이메일 발송 이력</h3>
+    {% if email_history %}
+    <div class="table-wrap">
+      <table class="history-table">
+        <thead>
+          <tr>
+            <th>발송 시각</th>
+            <th>수신</th>
+            <th>품목</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for h in email_history %}
+          <tr>
+            <td>{{ h.sent_at }}</td>
+            <td>{{ h.to }}</td>
+            <td>{{ h.item_names | join(', ') }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <p class="history-note">1시간 내 동일 품목은 자동 발송에서 제외됩니다.</p>
+    {% else %}
+    <p class="history-empty">발송 이력이 없습니다.</p>
+    {% endif %}
+  </section>
 
   <footer>
     재고 부족 기준: 현재재고 &lt; 안전재고 → ibk6895@gmail.com 윌로 발주 알림 메일 발송
@@ -127,7 +172,10 @@
       el.style.display = "block";
     }
 
+    function getRecipientEmail() { return (document.getElementById("recipientEmail").value || "").trim(); }
+
     document.getElementById("btnSave").onclick = function () {
+      var recipientEmail = getRecipientEmail();
       var inputs = document.querySelectorAll(".input-current");
       var updates = [];
       inputs.forEach(function (inp) {
@@ -138,13 +186,13 @@
       fetch("/save", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ updates: updates })
+        body: JSON.stringify({ updates: updates, recipient_email: recipientEmail })
       })
         .then(function (r) { return r.json(); })
         .then(function (data) {
           if (data.ok) {
             if (data.email_sent && data.alert_count) {
-              showMsg("저장되었습니다. 재고 부족 품목(" + data.alert_count + "건)으로 담당자(ibk6895@gmail.com)에게 메일을 자동 발송했습니다.", false);
+              showMsg("저장되었습니다. 재고 부족 품목(" + data.alert_count + "건)으로 담당자(" + (data.to || recipientEmail) + ")에게 메일을 자동 발송했습니다.", false);
             } else if (data.alert_error) {
               showMsg("저장되었습니다. 단, 메일 자동 발송 실패: " + data.alert_error, true);
             } else {
@@ -160,14 +208,19 @@
 
     document.getElementById("btnAlert").onclick = function () {
       this.disabled = true;
-      fetch("/send-alert", { method: "POST", headers: { "Content-Type": "application/json" } })
+      var recipientEmail = getRecipientEmail();
+      fetch("/send-alert", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ recipient_email: recipientEmail })
+      })
         .then(function (r) { return r.json(); })
         .then(function (data) {
           if (data.ok) {
             if (data.sent === 0) {
               showMsg("재고 부족 품목이 없습니다.", false);
             } else {
-              showMsg("메일 발송 완료: " + (data.to || "ibk6895@gmail.com") + " (" + (data.count || 0) + "건)", false);
+              showMsg("메일 발송 완료: " + (data.to || recipientEmail) + " (" + (data.count || 0) + "건)", false);
             }
           } else {
             showMsg(data.message || "발송 실패", true);

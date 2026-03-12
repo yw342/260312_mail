@@ -30,3 +30,6 @@ Thumbs.db
 
 # 로그
 *.log
+
+# 이메일 발송 이력 (로컬/서버별로 유지)
+email_history.json

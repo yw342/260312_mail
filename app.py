@@ -2,9 +2,11 @@
 """
 재고 웹 입력·확인 및 부족 시 메일 발송
 - 보내는 사람: byw004422@gmail.com
-- 받는 사람: ibk6895@gmail.com
+- 받는 사람: HTML 페이지 담당자 이메일 입력란
 """
 import os
+import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from flask import Flask, render_template, request, jsonify, redirect, url_for
@@ -20,6 +22,78 @@ import inventory_alert as alert
 app = Flask(__name__)
 BASE_DIR = Path(__file__).resolve().parent
 EXCEL_PATH = Path(os.environ.get("INVENTORY_EXCEL_PATH", str(BASE_DIR / "domino_inventory_training.xlsx")))
+EMAIL_HISTORY_PATH = BASE_DIR / "email_history.json"
+EMAIL_THRESHOLD_HOURS = 1
+
+
+def load_email_history():
+    """이메일 발송 이력 로드."""
+    if not EMAIL_HISTORY_PATH.is_file():
+        return []
+    try:
+        with open(EMAIL_HISTORY_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+
+def save_email_history(records):
+    """이메일 발송 이력 저장 (최근 500건 유지)."""
+    with open(EMAIL_HISTORY_PATH, "w", encoding="utf-8") as f:
+        json.dump(records[-500:], f, ensure_ascii=False, indent=2)
+
+
+def get_item_codes_sent_within_hours(hours=1):
+    """지정 시간(기본 1시간) 내 발송된 품목의 품목코드 set 반환."""
+    records = load_email_history()
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+    codes = set()
+    for r in records:
+        try:
+            sent_at = datetime.fromisoformat(r.get("sent_at", "").replace("Z", "+00:00"))
+            if sent_at.tzinfo is None:
+                sent_at = sent_at.replace(tzinfo=timezone.utc)
+        except Exception:
+            continue
+        if sent_at >= cutoff:
+            for code in r.get("item_codes") or []:
+                if code:
+                    codes.add(str(code).strip())
+    return codes
+
+
+def append_email_record(to_email, items):
+    """발송 이력에 한 건 추가. items는 품목코드, 재료명 포함 dict 리스트."""
+    records = load_email_history()
+    item_codes = [str(i.get("품목코드") or "").strip() for i in items if i.get("품목코드")]
+    item_names = [str(i.get("재료명") or "").strip() for i in items]
+    records.append({
+        "sent_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "to": to_email,
+        "item_codes": item_codes,
+        "item_names": item_names,
+    })
+    save_email_history(records)
+
+
+def get_email_history_for_display(limit=50):
+    """하단 이력 표시용. 최근 limit건, sent_at을 로컬 시간으로 포맷."""
+    records = load_email_history()
+    out = []
+    for r in reversed(records[-limit:]):
+        try:
+            sent_at = r.get("sent_at", "")
+            if sent_at:
+                dt = datetime.fromisoformat(sent_at.replace("Z", "+00:00"))
+                sent_at = dt.strftime("%Y-%m-%d %H:%M")
+        except Exception:
+            pass
+        out.append({
+            "sent_at": sent_at,
+            "to": r.get("to", ""),
+            "item_names": r.get("item_names") or [],
+        })
+    return out
 
 
 def _num_display(val):
@@ -60,15 +134,17 @@ def get_inventory_list():
             return ""
         return str(x).strip() if not isinstance(x, (int, float)) else x
 
+    sent_within_hour = get_item_codes_sent_within_hours(EMAIL_THRESHOLD_HOURS)
     result = []
     for i, row in enumerate(data_rows):
         excel_row = i + 2  # 1-based, row 1 = header
         raw_spec = v(row, idx_spec)
         raw_current = v(row, idx_current)
         raw_safety = v(row, idx_safety)
+        code = v(row, idx_code)
         result.append({
             "row": excel_row,
-            "품목코드": v(row, idx_code),
+            "품목코드": code,
             "재료명": v(row, idx_name),
             "규격": _num_display(raw_spec) if isinstance(raw_spec, (int, float)) else raw_spec,
             "단위": v(row, idx_unit),
@@ -76,6 +152,7 @@ def get_inventory_list():
             "안전재고": _num_display(raw_safety) if isinstance(raw_safety, (int, float)) else raw_safety,
             "상태": v(row, idx_status),
             "거래처이메일": v(row, idx_email),
+            "이메일_발송여부": "1시간 내 발송" if (code and str(code).strip() in sent_within_hour) else "-",
         })
     return result
 
@@ -136,13 +213,17 @@ def get_dashboard(items):
 def index():
     items = get_inventory_list()
     dashboard = get_dashboard(items)
-    return render_template("index.html", items=items, dashboard=dashboard)
+    email_history = get_email_history_for_display(50)
+    return render_template("index.html", items=items, dashboard=dashboard, email_history=email_history)
 
 
-def check_and_send_alert():
-    """저장된 엑셀 기준으로 재고 부족 확인 후 담당자(ibk6895@gmail.com)에게 메일 자동 발송. (sent, count, error) 반환."""
+def check_and_send_alert(recipient_email):
+    """저장된 엑셀 기준으로 재고 부족 확인 후 담당자(recipient_email)에게 메일 발송. 1시간 내 발송한 품목은 제외."""
+    if not recipient_email or "@" not in str(recipient_email).strip():
+        return False, 0, "담당자 이메일을 입력하세요."
+    recipient_email = str(recipient_email).strip()
     if not alert.SENDER_PASSWORD:
-        return False, 0, ".env에 INVENTORY_SENDER_PASSWORD 설정 필요"
+        return False, 0, "INVENTORY_SENDER_PASSWORD 환경 변수(또는 .env) 설정 필요"
     try:
         data_rows, col = alert.load_inventory(EXCEL_PATH)
         if not col:
@@ -150,14 +231,19 @@ def check_and_send_alert():
         low_stock = alert.get_low_stock_items(data_rows, col)
         if not low_stock:
             return False, 0, None
+        sent_recently = get_item_codes_sent_within_hours(EMAIL_THRESHOLD_HOURS)
+        low_stock_to_send = [x for x in low_stock if (x.get("품목코드") or "").strip() not in sent_recently]
+        if not low_stock_to_send:
+            return False, 0, "1시간 내 발송된 품목만 있어 이번에는 발송하지 않았습니다."
         subject, body = alert.build_email_body(
-            alert.RECIPIENT_EMAIL, low_stock, alert.SENDER_EMAIL, all_to_one=True
+            recipient_email, low_stock_to_send, alert.SENDER_EMAIL, all_to_one=True
         )
         alert.send_mail(
-            alert.RECIPIENT_EMAIL, subject, body,
+            recipient_email, subject, body,
             alert.SENDER_EMAIL, alert.SENDER_PASSWORD
         )
-        return True, len(low_stock), None
+        append_email_record(recipient_email, low_stock_to_send)
+        return True, len(low_stock_to_send), None
     except Exception as e:
         return False, 0, str(e)
 
@@ -170,12 +256,15 @@ def save():
     updates = data.get("updates") if isinstance(data, dict) else []
     if not updates:
         return jsonify({"ok": False, "message": "updates 배열 필요"}), 400
+    recipient_email = (data.get("recipient_email") or "").strip() if isinstance(data, dict) else ""
     try:
         update_excel_current_stock(updates)
-        email_sent, alert_count, alert_error = check_and_send_alert()
+        email_sent, alert_count, alert_error = check_and_send_alert(recipient_email)
         res = {"ok": True, "email_sent": email_sent, "alert_count": alert_count}
         if alert_error and email_sent is False and alert_count == 0:
             res["alert_error"] = alert_error
+        if email_sent:
+            res["to"] = recipient_email
         return jsonify(res)
     except Exception as e:
         return jsonify({"ok": False, "message": str(e)}), 500
@@ -183,13 +272,15 @@ def save():
 
 @app.route("/send-alert", methods=["POST"])
 def send_alert():
-    """재고 부족 확인 후 ibk6895@gmail.com 으로 메일 발송 (발신: byw004422@gmail.com)."""
-    email_sent, alert_count, error = check_and_send_alert()
+    """재고 부족 확인 후 HTML에서 받은 담당자 이메일로 메일 발송."""
+    data = request.get_json(force=True, silent=True) or request.form or {}
+    recipient_email = (data.get("recipient_email") or "").strip()
+    email_sent, alert_count, error = check_and_send_alert(recipient_email)
     if error and not email_sent:
         return jsonify({"ok": False, "message": error}), 400
     if not email_sent:
         return jsonify({"ok": True, "sent": 0, "message": "재고 부족 품목 없음"})
-    return jsonify({"ok": True, "sent": 1, "count": alert_count, "to": alert.RECIPIENT_EMAIL})
+    return jsonify({"ok": True, "sent": 1, "count": alert_count, "to": recipient_email})
 
 
 if __name__ == "__main__":

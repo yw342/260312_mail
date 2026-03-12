@@ -101,7 +101,19 @@ python inventory_alert.py
 
 ---
 
-## GitHub / 배포
+## GitHub / Vercel 배포
 
 - 저장소: [https://github.com/yw342/260312_mail](https://github.com/yw342/260312_mail)
-- Vercel 등에 배포할 때는 환경 변수에 `INVENTORY_SENDER_EMAIL`, `INVENTORY_SENDER_PASSWORD`, `INVENTORY_RECIPIENT_EMAIL`을 설정한 뒤 배포하세요.
+
+### Vercel 환경 변수 (필수)
+
+**상세 입력 방법**: [ENV_SETUP.md](ENV_SETUP.md) 참고
+
+| Key (변수명) | Value (입력 예) | 필수 |
+|--------------|-----------------|------|
+| `INVENTORY_SENDER_EMAIL` | `byw004422@gmail.com` | ✅ |
+| `INVENTORY_SENDER_PASSWORD` | Gmail 앱 비밀번호 16자 (공백 없이) | ✅ |
+
+- **담당자 이메일(수신 주소)**은 환경 변수가 아니라 **웹 페이지 상단 "담당자 이메일" 입력란**에서 입력합니다.
+- 입력 위치: Vercel → 프로젝트 → **Settings** → **Environment Variables**
+- `INVENTORY_SENDER_PASSWORD`는 [Google 앱 비밀번호](https://myaccount.google.com/apppasswords)에서 발급 (일반 비밀번호 아님). 값은 **Encrypted** 저장, 코드/저장소에 넣지 마세요.

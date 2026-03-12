@@ -63,6 +63,7 @@ def get_low_stock_items(data_rows, col):
     low = []
     idx_current = col.get("현재재고", col.get("현재 재고", -1))
     idx_safety = col.get("안전재고", col.get("안전 재고", -1))
+    idx_code = col.get("품목코드", -1)
     idx_name = col.get("재료명", -1)
     idx_unit = col.get("단위", -1)
     idx_order_qty = col.get("발주권장수량", col.get("발주 권장수량", -1))
@@ -89,6 +90,7 @@ def get_low_stock_items(data_rows, col):
             current, safety = 0, 0
         if current < safety:
             low.append({
+                "품목코드": v(idx_code) or "",
                 "재료명": v(idx_name) or "-",
                 "단위": v(idx_unit) or "",
                 "현재재고": current,
